@@ -1,0 +1,7 @@
+NSURLConnection is very useful, but it can buffer data coming in from the 
+network and this can be undesirable in some applications.  SZURLConnection
+is meant to be a drop-in replacement for basic NSURLConnection functionality.
+It supports a similar delegate methodology to NSURLConnection.
+
+Limitations:
+SZURLConnection does not support caching or authorization delegate methods.
