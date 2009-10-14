@@ -300,8 +300,12 @@ static void SZStreamCallback(CFReadStreamRef stream,
                                                                               HTTPMessage:cfResponse]
                                                    autorelease];
                     [self szConnection:self didReceiveResponse:response];
-                    CFRelease(cfResponse);                    
                     _sentResponse = YES;
+                }
+
+                if(cfResponse == NULL)
+                {
+                    CFRelease(cfResponse);                    
                 }
             }
             
