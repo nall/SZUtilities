@@ -40,7 +40,11 @@
 
 static NSUInteger kszURLBufferSize = 32 * 1024;
 
+static NSOperationQueue* urlQueue;
+
 @interface SZURLConnection(Private)
+-(void)retainQueue;
+-(void)releaseQueue;
 -(void)startConnection;
 -(void)handleStreamEvent:(CFStreamEventType)eventType
                 onStream:(CFReadStreamRef)cfStream;
@@ -116,6 +120,8 @@ static void SZStreamCallback(CFReadStreamRef stream,
     self = [super init];
     if(self != nil)
     {
+        [self retainQueue];
+        
         [self setDelegate:delegate];
         _request = [request copy];
         _currentData = [[NSMutableData alloc] initWithCapacity:kszURLBufferSize];
@@ -123,7 +129,7 @@ static void SZStreamCallback(CFReadStreamRef stream,
         
         if(startImmediately)
         {
-            [self startConnection];
+            [self start];
         }
     }
     return self;    
@@ -149,6 +155,8 @@ static void SZStreamCallback(CFReadStreamRef stream,
         _cfStream = NULL;    
     }
     
+    [self releaseQueue];
+    
     [_currentData release];
     [_delegate release];
     [_request release];
@@ -157,7 +165,12 @@ static void SZStreamCallback(CFReadStreamRef stream,
 
 -(void)start
 {
-    [self startConnection];
+    NSInvocationOperation* op = [[[NSInvocationOperation alloc]
+                                  initWithTarget:self
+                                  selector:@selector(startConnection)
+                                  object:nil]
+                                 autorelease];
+    [urlQueue addOperation:op];
 }
 
 -(void)cancel
@@ -204,6 +217,8 @@ static void SZStreamCallback(CFReadStreamRef stream,
 @implementation SZURLConnection(Private)
 -(void)startConnection
 {
+    NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+    
     _sentResponse = NO;
     CFHTTPMessageRef cfRequest = 
     CFHTTPMessageCreateRequest(kCFAllocatorDefault, 
@@ -240,7 +255,7 @@ static void SZStreamCallback(CFReadStreamRef stream,
                                         kCFRunLoopCommonModes);
     }
        
-    if(!CFReadStreamOpen(_cfStream))
+    if(CFReadStreamOpen(_cfStream) == TRUE)
     {
         CFStreamError error = CFReadStreamGetError(_cfStream);
         if (error.error != 0)
@@ -258,12 +273,14 @@ static void SZStreamCallback(CFReadStreamRef stream,
             }
             // Check other domains.
         }
+        else
+        {
+            // start the run loop
+            CFRunLoopRun();
+        }
     }
-    else
-    {
-        // start the run loop
-        //CFRunLoopRun();
-    }
+    
+    [pool drain];
 }
 
 -(void)handleStreamEvent:(CFStreamEventType)eventType
@@ -279,12 +296,16 @@ static void SZStreamCallback(CFReadStreamRef stream,
                                              userInfo:nil];
             [self szConnection:self didFailWithError:error];
             
+            CFReadStreamUnscheduleFromRunLoop(cfStream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
+            CFReadStreamClose(cfStream);
             CFRelease(cfError);
             break;
         }
         case kCFStreamEventEndEncountered:
         {
             [self szConnectionDidFinishLoading:self];
+            CFReadStreamUnscheduleFromRunLoop(cfStream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
+            CFReadStreamClose(cfStream);
             break;
         }
         case kCFStreamEventHasBytesAvailable:
@@ -302,8 +323,8 @@ static void SZStreamCallback(CFReadStreamRef stream,
                     [self szConnection:self didReceiveResponse:response];
                     _sentResponse = YES;
                 }
-
-                if(cfResponse == NULL)
+                
+                if(cfResponse != NULL)
                 {
                     CFRelease(cfResponse);                    
                 }
@@ -327,6 +348,23 @@ static void SZStreamCallback(CFReadStreamRef stream,
             break;
         }
     }
+}
+
+-(void)retainQueue
+{
+    if(urlQueue == nil)
+    {
+        urlQueue = [[NSOperationQueue alloc] init];
+    }
+    else
+    {
+        [urlQueue retain];
+    }
+}
+
+-(void)releaseQueue
+{
+    [urlQueue release];
 }
 
 @end

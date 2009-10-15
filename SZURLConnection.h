@@ -36,6 +36,7 @@
 //  Copyright 2009 Karelia Software. All rights reserved.
 //
 
+
 #import <Foundation/Foundation.h>
 
 // There is no public API to create an NSHTTPResponse, so subclass it and
@@ -100,11 +101,5 @@ didReceiveResponse:(NSURLResponse*)response;
 
 -(void)szConnection:(SZURLConnection*)connection
  didFailWithError:(NSError*)error;
-
-
-
-
-
-
 
 @end
