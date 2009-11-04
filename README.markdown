@@ -10,4 +10,4 @@ SZURLConnection does not support caching or authorization delegate methods.
 ## SZOverlayWindow ##
 This is an NSWindow subclass designed to be used as an NSWindow child window.
 It's usage is described in [this blog post]
-(http://blog.stuntaz.org/2009/11/03/nswindow-overlay.html)
+(http://blog.stuntaz.org/cocoa/2009/11/03/nswindow-overlay.html)
