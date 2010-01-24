@@ -3,7 +3,7 @@
 //  SZUtilities
 //
 //  Created by Jon Nall on 11/01/09.
-//  Copyright (c) 2009 STUNTAZ!!!. All rights reserved.
+//  Copyright (c) 2009-2010 STUNTAZ!!!. All rights reserved.
 //  
 //
 //  Redistribution and use in source and binary forms, with or without
@@ -70,6 +70,16 @@
     }
     
     return self;
+}
+
+-(void)parentDidResize
+{
+    NSRect overlayRect = NSMakeRect([self parentWindow].frame.origin.x,
+                                    [self parentWindow].frame.origin.y, 
+                                    [[[self parentWindow] contentView] frame].size.width,
+                                    [[[self parentWindow] contentView] frame].size.height);
+
+    [self setFrame:overlayRect display:NO];
 }
 
 // By default NSWindows cannot become key. We can.

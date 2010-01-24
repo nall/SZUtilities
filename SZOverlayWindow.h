@@ -39,4 +39,8 @@
 }
 -(id)initWithParentWindow:(NSWindow*)parentWindow
                  withView:(NSView*)subview;
+
+// The NSWindowController of the parent window should implement
+// -windowDidResize: and then invoke this method.
+-(void)parentDidResize;
 @end
