@@ -2,7 +2,7 @@
 //  SZURLConnection.h
 //
 //  Created by Jon Nall on 10/9/09.
-//  Copyright 2009-2010 STUNTAZ!!!. All rights reserved.
+//  Copyright 2009-2010 STUNTAZ!!! All rights reserved.
 // 
 //  Redistribution and use in source and binary forms, with or without
 //  modification, are permitted provided that the following conditions are met:
@@ -38,6 +38,9 @@
 
 
 #import <Foundation/Foundation.h>
+
+extern NSString* const kszURLProxyHost;
+extern NSString* const kszURLProxyPort;
 
 // There is no public API to create an NSHTTPResponse, so subclass it and
 // return this instance
@@ -79,6 +82,15 @@
 }
 @property (retain) id delegate;
 @property (assign) NSUInteger minimumDataSize;
+
++(NSData*)sendSynchronousRequest:(NSURLRequest*)request
+               returningResponse:(NSURLResponse**)response
+                           error:(NSError**)error;
+
++(NSData*)sendSynchronousRequest:(NSURLRequest*)request
+               returningResponse:(NSURLResponse**)response
+                     withTimeout:(const NSTimeInterval)timeout
+                           error:(NSError**)error;
 
 -(id)initWithRequest:(NSURLRequest*)request
             delegate:(id)delegate
