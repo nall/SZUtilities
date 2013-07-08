@@ -2,7 +2,7 @@
 //  SZURLConnection.h
 //
 //  Created by Jon Nall on 10/9/09.
-//  Copyright 2009-2010 STUNTAZ!!! All rights reserved.
+//  Copyright 2009-2013 STUNTAZ!!! All rights reserved.
 // 
 //  Redistribution and use in source and binary forms, with or without
 //  modification, are permitted provided that the following conditions are met:
@@ -41,16 +41,17 @@
 NSString* const kszURLProxyHost = @"kszURLProxyHost";
 NSString* const kszURLProxyPort = @"kszURLProxyPort";
 
+NSString* const kszURLErrorDomain = @"org.stuntaz.SZURLErrorDomain";
+const NSUInteger kszURLCouldNotCreateStream = -1000;
+
+
 static NSUInteger kszURLBufferSize = 32 * 1024;
 
-static NSOperationQueue* urlQueue;
-
 @interface SZURLConnection(Private)
--(void)retainQueue;
--(void)releaseQueue;
 -(void)startConnection;
 -(void)handleStreamEvent:(CFStreamEventType)eventType
                 onStream:(CFReadStreamRef)cfStream;
++(NSOperationQueue*)urlQueue;
 @end
 
 #pragma mark -
@@ -65,10 +66,10 @@ static NSOperationQueue* urlQueue;
     NSInteger contentLength = [[_headerFields objectForKey:@"Content-Length"] intValue];
     NSString* encoding = [_headerFields objectForKey:@"Content-Encoding"];
     
-    if(self = [super initWithURL:URL
-                        MIMEType:MIMEType
-           expectedContentLength:contentLength
-                textEncodingName:encoding])
+    if((self = [super initWithURL:URL
+                         MIMEType:MIMEType
+            expectedContentLength:contentLength
+                 textEncodingName:encoding]))
     {
         _statusCode = CFHTTPMessageGetResponseStatusCode(message);
     }
@@ -94,7 +95,7 @@ static NSOperationQueue* urlQueue;
 
 -(NSString*)description
 {
-    return [NSString stringWithFormat:@"Status %d: <%@:0x%x>", [self statusCode], [self class], self];
+    return [NSString stringWithFormat:@"Status %ld: <%@:0x%p>", [self statusCode], [self class], self];
 }
 @end
 
@@ -147,7 +148,7 @@ static NSOperationQueue* urlQueue;
 
 -(void)timeout:(NSTimer*)timer
 {
-    NSLog(@"%@ TIMEOUT!", [self class]);
+    NSLog(@"%@ TIMEOUT! (%f seconds)", [self class], [[timer userInfo] doubleValue]);
     [condition lock];
     timedOut = YES;
     [condition signal];
@@ -160,11 +161,15 @@ static NSOperationQueue* urlQueue;
 {
     if(timeout != 0)
     {
-        timeoutTimer = [[NSTimer scheduledTimerWithTimeInterval:timeout
-                                                         target:self
-                                                       selector:@selector(timeout:)
-                                                       userInfo:nil
-                                                        repeats:NO] retain];
+        dispatch_queue_t queue = dispatch_queue_create("timerQueue", 0);
+        
+        dispatch_async(queue, ^{
+            timeoutTimer = [[NSTimer scheduledTimerWithTimeInterval:timeout
+                                                             target:self
+                                                           selector:@selector(timeout:)
+                                                           userInfo:[NSNumber numberWithDouble:timeout]
+                                                            repeats:NO] retain]; 
+        });
     }
                          
     [condition lock];
@@ -279,7 +284,7 @@ static void SZStreamCallback(CFReadStreamRef stream,
 {
     return [SZURLConnection sendSynchronousRequest:request
                                  returningResponse:response
-                                       withTimeout:0
+                                       withTimeout:30
                                              error:error];
 }
 
@@ -311,8 +316,6 @@ static void SZStreamCallback(CFReadStreamRef stream,
     self = [super init];
     if(self != nil)
     {
-        [self retainQueue];
-        
         [self setDelegate:delegate];
         _request = [request copy];
         _currentData = [[NSMutableData alloc] initWithCapacity:kszURLBufferSize];
@@ -346,12 +349,16 @@ static void SZStreamCallback(CFReadStreamRef stream,
         _cfStream = NULL;    
     }
     
-    [self releaseQueue];
-    
+
     [_currentData release];
     [_delegate release];
     [_request release];
     [super dealloc];
+}
+
+-(NSURL*)URL
+{
+    return [_request URL];                            
 }
 
 -(void)start
@@ -361,7 +368,7 @@ static void SZStreamCallback(CFReadStreamRef stream,
                                   selector:@selector(startConnection)
                                   object:nil]
                                  autorelease];
-    [urlQueue addOperation:op];
+    [[SZURLConnection urlQueue] addOperation:op];
 }
 
 -(void)cancel
@@ -432,13 +439,23 @@ static void SZStreamCallback(CFReadStreamRef stream,
     NSString* proxyHost = [[NSUserDefaults standardUserDefaults] stringForKey:kszURLProxyHost];
     if(proxyHost != nil && [proxyHost length] > 0)
     {
-        SZLog(kszCompCore, INFO, @"Using HTTP proxy: %@:%@",
-              proxyHost, [[NSUserDefaults standardUserDefaults] objectForKey:kszURLProxyPort]);
+        NSString* proxyPortStr = [[NSUserDefaults standardUserDefaults] objectForKey:kszURLProxyPort];
+        NSNumber* proxyPort = [NSNumber numberWithInteger:[proxyPortStr integerValue]];
+        
+        NSLog(@"Using HTTP proxy: %@:%@", proxyHost, proxyPort);
         NSDictionary* proxyDict = [NSDictionary dictionaryWithObjectsAndKeys:
                                     proxyHost, kCFStreamPropertySOCKSProxyHost,
-                                    [[NSUserDefaults standardUserDefaults] objectForKey:kszURLProxyPort], kCFStreamPropertySOCKSProxyPort,
+                                    proxyPort, kCFStreamPropertySOCKSProxyPort,
                                     nil];
-        CFReadStreamSetProperty(_cfStream, kCFStreamPropertyHTTPProxy, proxyDict);
+        CFReadStreamSetProperty(_cfStream, kCFStreamPropertySOCKSProxy, proxyDict);
+    }
+
+    if([[self.URL scheme] isEqualToString:@"https"])
+    {
+        NSDictionary* sslProps = [NSDictionary dictionaryWithObjectsAndKeys:
+                                  (id)kCFNull, kCFStreamSSLPeerName,
+                                  nil];
+        CFReadStreamSetProperty(_cfStream, kCFStreamPropertySSLSettings, sslProps);
     }
     
     CFRelease(cfRequest);
@@ -460,32 +477,32 @@ static void SZStreamCallback(CFReadStreamRef stream,
        
     if(CFReadStreamOpen(_cfStream) == TRUE)
     {
-        CFStreamError error = CFReadStreamGetError(_cfStream);
-        if (error.error != 0)
-        {
-            // An error has occurred.
-            if (error.domain == kCFStreamErrorDomainPOSIX)
-            {
-                // Interpret myErr.error as a UNIX errno.
-                strerror(error.error);
-            }
-            else if (error.domain == kCFStreamErrorDomainMacOSStatus)
-            {
-                OSStatus macError = (OSStatus)error.error;
-                (void)macError;
-            }
-            // Check other domains.
-            NSLog(@"Stream error occurred: Domain: %d, Error: %d", error.domain, error.error);
-        }
-        else
+        // CFError and NSError are toll-free bridged
+        NSError* error = (NSError*)CFReadStreamCopyError(_cfStream);
+        if(error == nil)
         {
             // start the run loop
             CFRunLoopRun();
         }
+        else
+        {
+            NSLog(@"Stream error occurred: %@", error);
+            [[self delegate] szConnection:self
+                         didFailWithError:error];            
+            [error release];
+        }
     }
     else
     {
-        NSLog(@"Could not open stream");
+        NSDictionary* userInfo = [NSDictionary dictionaryWithObjectsAndKeys:
+                                  [_request URL], NSURLErrorKey,
+                                  nil];
+        NSError* error = [NSError errorWithDomain:kszURLErrorDomain
+                                             code:kszURLCouldNotCreateStream
+                                         userInfo:userInfo];
+        NSLog(@"Could not open stream: %@", error);
+        [[self delegate] szConnection:self
+                     didFailWithError:error];
     }
 
     
@@ -497,21 +514,48 @@ static void SZStreamCallback(CFReadStreamRef stream,
 {
     switch(eventType)
     {
+        case kCFStreamEventOpenCompleted:
+        case kCFStreamEventCanAcceptBytes:
+        case kCFStreamEventNone:
+        {
+            // Do nothing
+            break;
+        }
         case kCFStreamEventErrorOccurred:
         {
-            CFErrorRef cfError = CFReadStreamCopyError(cfStream);
-            NSError* error = [NSError errorWithDomain:(NSString*)CFErrorGetDomain(cfError)
-                                                 code:CFErrorGetCode(cfError)
-                                             userInfo:nil];
-            [self szConnection:self didFailWithError:error];
+            // Send in any pending data
+            //
+            if([_currentData length] > 0)
+            {
+                [self szConnection:self didReceiveData:[[_currentData copy] autorelease]];
+                [_currentData setLength:0];
+            }                    
+
+            // CFError and NSError are toll-free bridged
+            NSError* error = (NSError*)CFReadStreamCopyError(cfStream);
+            if(error != nil)
+            {
+                NSLog(@"Stream error occurred: %@", error);
+                [[self delegate] szConnection:self
+                             didFailWithError:error];   
+                [error release];
+            }
             
             CFReadStreamUnscheduleFromRunLoop(cfStream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
             CFReadStreamClose(cfStream);
-            CFRelease(cfError);
             break;
         }
         case kCFStreamEventEndEncountered:
         {
+            // Send in any pending data
+            //
+            if([_currentData length] > 0)
+            {
+                NSLog(@"Sending in last %lu bytes of data before completion", [_currentData length]);
+                [self szConnection:self didReceiveData:[[_currentData copy] autorelease]];
+                [_currentData setLength:0];
+            }                    
+
             [self szConnectionDidFinishLoading:self];
             CFReadStreamUnscheduleFromRunLoop(cfStream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
             CFReadStreamClose(cfStream);
@@ -545,10 +589,11 @@ static void SZStreamCallback(CFReadStreamRef stream,
                 uint8_t buffer[kszURLBufferSize];
                 CFIndex bytesRead = 0;
                 
-                bytesRead = CFReadStreamRead(_cfStream, buffer, sizeof(buffer));
+                bytesRead = CFReadStreamRead(cfStream, buffer, sizeof(buffer));
                 if(bytesRead == -1)
                 {
-                    NSLog(@"CFReadStreamRead return -1 bytesRead");
+                    NSLog(@"CFReadStreamRead returned -1 bytesRead");
+                    [self handleStreamEvent:kCFStreamEventErrorOccurred onStream:cfStream];
                 }
                 else
                 {
@@ -567,28 +612,15 @@ static void SZStreamCallback(CFReadStreamRef stream,
     }
 }
 
--(void)retainQueue
++(NSOperationQueue*)urlQueue
 {
-    if(urlQueue == nil)
-    {
-        urlQueue = [[NSOperationQueue alloc] init];
-    }
-    else
-    {
-        [urlQueue retain];
-    }
-}
-
--(void)releaseQueue
-{
-    const BOOL setToNil = [urlQueue retainCount] == 1;
+    static NSOperationQueue* _queue = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        _queue = [[NSOperationQueue alloc] init];
+    });
     
-    [urlQueue release];
-    
-    if(setToNil == YES)
-    {
-        urlQueue = nil;
-    }
+    return _queue;    
 }
 
 @end
